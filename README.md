@@ -1,3 +1,7 @@
+git clone https://github.com/7snhacker/sqlicheck.git
+-----------------------------------------------------------------
+cd sqlicheck
+-----------------------------------------------------------------
 example : python sqlicheck.py --dorks php?id= --num_results 20
 -----------------------------------------------------------------
 example2 (This Python script performs automated SQL injection vulnerability testing on web pages using Google search results.) To Run The Script: python sqlicheck.py 
